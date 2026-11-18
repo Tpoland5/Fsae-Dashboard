@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FSAE CAN Dashboard</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #181b22; --tile: #1f232c; --line: #2b303b;
+    --text: #e8eaee; --dim: #8a909c; --accent: #4fb3ff; --good: #3ecf75; --bad: #ff5a5a; --warn: #ffb547;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+           padding: 12px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
+           position: sticky; top: 0; z-index: 2; }
+  header h1 { font-size: 16px; margin: 0 8px 0 0; font-weight: 600; }
+  button { background: var(--tile); color: var(--text); border: 1px solid var(--line);
+           border-radius: 6px; padding: 7px 12px; font: inherit; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .4; cursor: default; }
+  button.primary { background: var(--accent); color: #06121d; border-color: var(--accent); font-weight: 600; }
+  button.rec { border-color: var(--bad); color: var(--bad); }
+  .spacer { flex: 1; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px;
+          background: var(--tile); border: 1px solid var(--line); font-size: 12px; white-space: nowrap; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); }
+  .dot.good { background: var(--good); } .dot.bad { background: var(--bad); } .dot.warn { background: var(--warn); }
+  #bus { display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 8px 16px; color: var(--dim);
+         font-size: 12px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+  #bus b { color: var(--text); font-weight: 500; }
+  #bus .alert { color: var(--warn); }
+  main { padding: 16px; display: flex; flex-direction: column; gap: 18px; }
+  #msg { color: var(--dim); padding: 40px 16px; text-align: center; }
+  #msg.err { color: var(--bad); }
+  section h2 { display: flex; align-items: baseline; gap: 10px; margin: 0 0 8px; font-size: 13px;
+               font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
+  section h2 .hz { font-weight: 400; text-transform: none; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+  section h2 .stale-tag { display: none; color: var(--bad); text-transform: none; letter-spacing: 0; font-weight: 500; }
+  section.stale h2 .stale-tag { display: inline; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+  .tile { background: var(--tile); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  section.stale .tile { opacity: .35; }
+  .tile .name { color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tile .val { font-size: 30px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.15; margin: 2px 0; }
+  .tile .unit { font-size: 14px; color: var(--dim); font-weight: 400; margin-left: 4px; }
+  .tile .mm { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>FSAE CAN</h1>
+  <button id="btnConnect" class="primary">Connect</button>
+  <button id="btnDisconnect" disabled>Disconnect</button>
+  <button id="btnRecord" disabled>Record CSV</button>
+  <button id="btnReset" disabled>Reset min/max</button>
+  <span class="spacer"></span>
+  <span class="pill"><span class="dot" id="dotBle"></span><span id="txtBle">BLE: not connected</span></span>
+  <span class="pill"><span class="dot" id="dotCan"></span><span id="txtCan">CAN: --</span></span>
+</header>
+
+<div id="bus">
+  <span>frames/s <b id="sFps">--</b></span>
+  <span>not in file <b id="sOther">--</b>/s</span>
+  <span id="wrapBusErr">bus_err <b id="sBusErr">--</b></span>
+  <span id="wrapMissed">missed <b id="sMissed">--</b></span>
+  <span>rx_err <b id="sRxErr">--</b></span>
+  <span>tx_err <b id="sTxErr">--</b></span>
+  <span>state <b id="sState">--</b></span>
+  <span id="sRec"></span>
+</div>
+
+<main id="main">
+  <div id="msg">Press <b>Connect</b> and pick <b>FSAE-CAN</b>.</div>
+</main>
+
+<script>
+// Must match the firmware
+const SVC_UUID    = '7a1d0001-3c4e-4b8a-9f2d-5e6c7b8a9d01';
+const DATA_UUID   = '7a1d0002-3c4e-4b8a-9f2d-5e6c7b8a9d01';
+const STATUS_UUID = '7a1d0003-3c4e-4b8a-9f2d-5e6c7b8a9d01';
+const CONFIG_UUID = '7a1d0004-3c4e-4b8a-9f2d-5e6c7b8a9d01';
+const CFG_CHUNK   = 480;
+const STALE_MS    = 1000;
+const REC_MS      = 50;     // CSV sample period (20 Hz)
+const STATES      = ['STOPPED', 'RUNNING', 'BUS_OFF', 'RECOVERING'];
+
+const $ = id => document.getElementById(id);
+let device = null, chars = {}, streams = [], cfgVersion = -1;
+let userDisconnect = false, loadingConfig = false;
+let lastBusErr = null, lastMissed = null;
+let recording = false, recRows = [], recTimer = null, recStart = 0;
+
+// ---------- UI helpers ----------
+function setMsg(text, isErr = false) {
+  const main = $('main');
+  main.innerHTML = '';
+  const d = document.createElement('div');
+  d.id = 'msg';
+  d.className = isErr ? 'err' : '';
+  d.innerHTML = text;
+  main.appendChild(d);
+}
+function setPill(dot, txt, cls, text) {
+  $(dot).className = 'dot ' + (cls || '');
+  $(txt).textContent = text;
+}
+function fmt(v, d) { return Number.isFinite(v) ? v.toFixed(d) : '--'; }
+function setButtons(connected) {
+  $('btnConnect').disabled = connected;
+  $('btnDisconnect').disabled = !connected;
+  $('btnRecord').disabled = !connected && !recording;
+  $('btnReset').disabled = !connected;
+}
+
+// ---------- Config ----------
+function parseConfig(text) {
+  const out = [];
+  let cur = null;
+  for (const line of text.split('\n')) {
+    const f = line.split('|');
+    if (f[0] === 'S' && f.length >= 4) {
+      cur = { idx: +f[1], id: +f[2], name: f.slice(3).join('|'), params: [], last: 0, hz: 0 };
+      out[cur.idx] = cur;
+    } else if (f[0] === 'P' && f.length >= 4 && cur) {
+      cur.params.push({ name: f[1], dec: +f[2], unit: f[3], value: NaN, min: Infinity, max: -Infinity });
+    }
+  }
+  return out.filter(Boolean);
+}
+
+function buildUI() {
+  const main = $('main');
+  main.innerHTML = '';
+  if (!streams.length) { setMsg('Connected, but no streams in the config. Check can_streams.txt on the ESP.', true); return; }
+  for (const s of streams) {
+    const sec = document.createElement('section');
+    sec.className = 'stale';
+    sec.innerHTML = `<h2><span></span><span class="hz"></span><span class="stale-tag">no data</span></h2><div class="grid"></div>`;
+    sec.querySelector('h2 span').textContent = `${s.name}  ·  ID ${s.id} (0x${s.id.toString(16).toUpperCase()})`;
+    s.elSec = sec;
+    s.elHz = sec.querySelector('.hz');
+    const grid = sec.querySelector('.grid');
+    for (const p of s.params) {
+      const t = document.createElement('div');
+      t.className = 'tile';
+      t.innerHTML = `<div class="name"></div><div class="val"><span class="v">--</span><span class="unit"></span></div><div class="mm">min -- · max --</div>`;
+      t.querySelector('.name').textContent = p.name;
+      t.querySelector('.name').title = p.name;
+      t.querySelector('.unit').textContent = p.unit;
+      p.elV = t.querySelector('.v');
+      p.elMM = t.querySelector('.mm');
+      grid.appendChild(t);
+    }
+    main.appendChild(sec);
+  }
+}
+
+async function loadConfig() {
+  if (loadingConfig) return;
+  loadingConfig = true;
+  try {
+    let text = '';
+    for (let page = 0; page < 64; page++) {
+      const w = chars.config.writeValueWithResponse ? chars.config.writeValueWithResponse.bind(chars.config)
+                                                    : chars.config.writeValue.bind(chars.config);
+      await w(new Uint8Array([page]));
+      const v = await chars.config.readValue();
+      text += new TextDecoder().decode(v);
+      if (v.byteLength < CFG_CHUNK) break;
+    }
+    if (recording) stopRecording();   // columns would change
+    streams = parseConfig(text);
+    buildUI();
+  } finally {
+    loadingConfig = false;
+  }
+}
+
+// ---------- Notifications ----------
+function onData(e) {
+  const dv = e.target.value;
+  if (dv.byteLength < 2) return;
+  const si = dv.getUint8(0), first = dv.getUint8(1);
+  const s = streams.find(x => x.idx === si);
+  if (!s) return;
+
+  if (first === 0xFF) {                       // rate packet
+    if (dv.byteLength >= 4) { s.hz = dv.getUint16(2, true); s.elHz.textContent = `${s.hz} Hz`; }
+    return;
+  }
+  const n = Math.floor((dv.byteLength - 2) / 4);
+  for (let k = 0; k < n; k++) {
+    const p = s.params[first + k];
+    if (!p) continue;
+    const v = dv.getFloat32(2 + 4 * k, true);
+    p.value = v;
+    if (Number.isFinite(v)) { if (v < p.min) p.min = v; if (v > p.max) p.max = v; }
+    p.elV.textContent = fmt(v, p.dec);
+    p.elMM.textContent = `min ${fmt(p.min, p.dec)} · max ${fmt(p.max, p.dec)}`;
+  }
+  s.last = performance.now();
+}
+
+function onStatus(e) {
+  const dv = e.target.value;
+  if (dv.byteLength < 18) return;
+  const canOk = dv.getUint8(1) & 1;
+  const state = STATES[dv.getUint8(2)] || '?';
+  const ver = dv.getUint8(3);
+  const fps = dv.getUint16(4, true), other = dv.getUint16(6, true);
+  const busErr = dv.getUint32(8, true), missed = dv.getUint32(12, true);
+
+  setPill('dotCan', 'txtCan', canOk ? 'good' : 'bad', canOk ? 'CAN: receiving' : 'CAN: no traffic');
+  $('sFps').textContent = fps;
+  $('sOther').textContent = other;
+  $('sBusErr').textContent = busErr;
+  $('sMissed').textContent = missed;
+  $('sRxErr').textContent = dv.getUint8(16);
+  $('sTxErr').textContent = dv.getUint8(17);
+  $('sState').textContent = state;
+  $('wrapBusErr').classList.toggle('alert', lastBusErr !== null && busErr > lastBusErr);
+  $('wrapMissed').classList.toggle('alert', lastMissed !== null && missed > lastMissed);
+  lastBusErr = busErr; lastMissed = missed;
+
+  if (cfgVersion !== -1 && ver !== cfgVersion) loadConfig().catch(err => console.error(err));  // 'r' on the ESP
+  cfgVersion = ver;
+}
+
+setInterval(() => {
+  const now = performance.now();
+  for (const s of streams) {
+    if (s.elSec) s.elSec.classList.toggle('stale', !s.last || now - s.last > STALE_MS);
+  }
+}, 250);
+
+// ---------- Connection ----------
+async function connect() {
+  if (!navigator.bluetooth) {
+    setMsg('This browser has no Web Bluetooth.<br>Use Chrome or Edge on Windows/Android, or the Bluefy browser on iPhone.', true);
+    return;
+  }
+  try {
+    userDisconnect = false;
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ services: [SVC_UUID] }, { namePrefix: 'FSAE' }],
+      optionalServices: [SVC_UUID],
+    });
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+    await openGatt();
+  } catch (err) {
+    if (err.name !== 'NotFoundError') setMsg('Connect failed: ' + err.message, true);  // NotFoundError = picker cancelled
+    setButtons(false);
+  }
+}
+
+async function openGatt() {
+  setPill('dotBle', 'txtBle', 'warn', 'BLE: connecting…');
+  const server = await device.gatt.connect();
+  const svc = await server.getPrimaryService(SVC_UUID);
+  chars.data   = await svc.getCharacteristic(DATA_UUID);
+  chars.status = await svc.getCharacteristic(STATUS_UUID);
+  chars.config = await svc.getCharacteristic(CONFIG_UUID);
+
+  await loadConfig();
+  cfgVersion = -1;
+
+  chars.data.addEventListener('characteristicvaluechanged', onData);
+  chars.status.addEventListener('characteristicvaluechanged', onStatus);
+  await chars.data.startNotifications();
+  await chars.status.startNotifications();
+
+  setPill('dotBle', 'txtBle', 'good', `BLE: ${device.name || 'connected'}`);
+  setButtons(true);
+}
+
+async function onDisconnected() {
+  setPill('dotBle', 'txtBle', 'bad', 'BLE: disconnected');
+  setPill('dotCan', 'txtCan', '', 'CAN: --');
+  setButtons(false);
+  if (userDisconnect || !device) return;
+  for (let i = 1; i <= 5; i++) {                // auto-reconnect
+    setPill('dotBle', 'txtBle', 'warn', `BLE: reconnecting (${i}/5)…`);
+    await new Promise(r => setTimeout(r, 1000));
+    try { await openGatt(); return; } catch (e) { /* try again */ }
+  }
+  setPill('dotBle', 'txtBle', 'bad', 'BLE: lost - press Connect');
+}
+
+function disconnect() {
+  userDisconnect = true;
+  if (device && device.gatt.connected) device.gatt.disconnect();
+}
+
+// ---------- CSV recording ----------
+function startRecording() {
+  recording = true;
+  recRows = [];
+  recStart = performance.now();
+  recTimer = setInterval(() => {
+    const row = [((performance.now() - recStart) / 1000).toFixed(3)];
+    for (const s of streams) for (const p of s.params) row.push(Number.isFinite(p.value) ? p.value.toFixed(p.dec) : '');
+    recRows.push(row.join(','));
+    $('sRec').textContent = `● REC ${((performance.now() - recStart) / 1000).toFixed(0)} s`;
+  }, REC_MS);
+  $('btnRecord').textContent = 'Stop & save';
+  $('btnRecord').classList.add('rec');
+  $('sRec').classList.add('alert');
+}
+
+function stopRecording() {
+  clearInterval(recTimer);
+  recording = false;
+  $('btnRecord').textContent = 'Record CSV';
+  $('btnRecord').classList.remove('rec');
+  $('sRec').textContent = '';
+  const esc = s => /[",]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  const header = ['time_s'];
+  for (const s of streams) for (const p of s.params) header.push(esc(p.unit ? `${p.name} (${p.unit})` : p.name));
+  const csv = header.join(',') + '\n' + recRows.join('\n') + '\n';
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  const t = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  a.download = `can_log_${t.getFullYear()}${pad(t.getMonth() + 1)}${pad(t.getDate())}_${pad(t.getHours())}${pad(t.getMinutes())}${pad(t.getSeconds())}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  setButtons(device && device.gatt.connected);
+}
+
+// ---------- Buttons ----------
+$('btnConnect').onclick = connect;
+$('btnDisconnect').onclick = disconnect;
+$('btnRecord').onclick = () => recording ? stopRecording() : startRecording();
+$('btnReset').onclick = () => {
+  for (const s of streams) for (const p of s.params) {
+    p.min = Infinity; p.max = -Infinity;
+    if (p.elMM) p.elMM.textContent = 'min -- · max --';
+  }
+};
+
+if (!navigator.bluetooth) {
+  setMsg('This browser has no Web Bluetooth.<br>Use Chrome or Edge on Windows/Android, or the Bluefy browser on iPhone.', true);
+  $('btnConnect').disabled = true;
+}
+</script>
+</body>
+</html>
