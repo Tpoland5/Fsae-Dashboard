@@ -1,0 +1,936 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FSAE CAN Dashboard</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #181b22; --tile: #1f232c; --line: #2b303b;
+    --text: #e8eaee; --dim: #8a909c; --accent: #4fb3ff; --good: #3ecf75; --bad: #ff5a5a; --warn: #ffb547;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+           padding: 12px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
+           position: sticky; top: 0; z-index: 2; }
+  header h1 { font-size: 16px; margin: 0 8px 0 0; font-weight: 600; }
+  button, select, input { font: inherit; color: var(--text); }
+  button { background: var(--tile); border: 1px solid var(--line);
+           border-radius: 6px; padding: 7px 12px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .4; cursor: default; }
+  button.primary { background: var(--accent); color: #06121d; border-color: var(--accent); font-weight: 600; }
+  button.rec { border-color: var(--bad); color: var(--bad); }
+  .spacer { flex: 1; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px;
+          background: var(--tile); border: 1px solid var(--line); font-size: 12px; white-space: nowrap; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); }
+  .dot.good { background: var(--good); } .dot.bad { background: var(--bad); } .dot.warn { background: var(--warn); }
+  #bus { display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 8px 16px; color: var(--dim);
+         font-size: 12px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+  #bus b { color: var(--text); font-weight: 500; }
+  #bus .alert { color: var(--warn); }
+
+  /* Shift light simulation */
+  #shift { padding: 14px 16px 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  #shiftLeds { display: grid; grid-template-columns: repeat(var(--n, 16), 1fr); gap: 6px; max-width: 760px; }
+  .led { aspect-ratio: 1; border-radius: 50%; background: #23262e; border: 1px solid #2f333d; transition: background .03s; }
+  #shiftInfo { display: flex; gap: 16px; align-items: baseline; margin-top: 8px; color: var(--dim);
+               font-size: 12px; font-variant-numeric: tabular-nums; }
+  #shiftRpm { color: var(--text); font-size: 20px; font-weight: 600; }
+  #shiftPreviewTag { color: var(--warn); display: none; }
+
+  main { padding: 16px; display: flex; flex-direction: column; gap: 18px; }
+  #msg { color: var(--dim); padding: 40px 16px; text-align: center; }
+  #msg.err { color: var(--bad); }
+  section h2 { display: flex; align-items: baseline; gap: 10px; margin: 0 0 8px; font-size: 13px;
+               font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
+  section h2 .hz { font-weight: 400; text-transform: none; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+  section h2 .stale-tag { display: none; color: var(--bad); text-transform: none; letter-spacing: 0; font-weight: 500; }
+  section.stale h2 .stale-tag { display: inline; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+  .tile { background: var(--tile); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  section.stale .tile { opacity: .35; }
+  .tile .name { color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tile .val { font-size: 30px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.15; margin: 2px 0; }
+  .tile .unit { font-size: 14px; color: var(--dim); font-weight: 400; margin-left: 4px; }
+  .tile .mm { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+
+  /* Dev panel */
+  #devBackdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: none; z-index: 10; }
+  #dev { position: fixed; top: 0; right: 0; bottom: 0; width: min(480px, 100vw); background: var(--panel);
+         border-left: 1px solid var(--line); z-index: 11; display: none; flex-direction: column; overflow-y: auto; }
+  body.dev-open #devBackdrop { display: block; }
+  body.dev-open #dev { display: flex; }
+  #dev .head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px;
+               border-bottom: 1px solid var(--line); }
+  #dev .head h2 { margin: 0; font-size: 15px; }
+  #dev .body { padding: 16px; display: flex; flex-direction: column; gap: 18px; }
+  #dev fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin: 0;
+                  display: flex; flex-direction: column; gap: 10px; }
+  #dev legend { color: var(--dim); font-size: 12px; padding: 0 6px; text-transform: uppercase; letter-spacing: .04em; }
+  #dev label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--dim); }
+  #dev .row { display: flex; gap: 10px; }
+  #dev .row > * { flex: 1; }
+  #dev input[type=number], #dev input[type=password], #dev select {
+    background: var(--tile); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; width: 100%; }
+  #dev input[type=range] { width: 100%; }
+  #dev .check { flex-direction: row; align-items: center; gap: 8px; color: var(--text); font-size: 13px; }
+  #dev .note { font-size: 12px; color: var(--dim); margin: 0; }
+  #dev .err { color: var(--bad); font-size: 12px; min-height: 1em; margin: 0; }
+  #dev .ok  { color: var(--good); font-size: 12px; min-height: 1em; margin: 0; }
+  #dev .btns { display: flex; gap: 8px; flex-wrap: wrap; }
+  #dev .btns > button { flex: 1; }
+  #ledTable { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+  #ledTable td { padding: 2px 4px; }
+  #ledTable td:first-child { color: var(--dim); width: 34px; }
+  #ledTable td.sw { width: 26px; }
+  #ledTable .swatch { width: 16px; height: 16px; border-radius: 50%; display: inline-block; vertical-align: middle;
+                      border: 1px solid rgba(255,255,255,.15); }
+  #ledTable input { padding: 4px 8px !important; }
+  #ledTable tr.flash td { padding-top: 8px; border-top: 1px dashed var(--line); }
+  #ledTable input.bad { border-color: var(--bad) !important; }
+  #graphWrap { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 6px; }
+  #graph { width: 100%; height: auto; display: block; touch-action: none; user-select: none; }
+  #graph .pt { cursor: ns-resize; }
+  #graph .flashHandle { cursor: ns-resize; }
+  #graphReadout { font-size: 12px; color: var(--dim); min-height: 1.2em; text-align: center; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>FSAE CAN</h1>
+  <button id="btnConnect" class="primary">Connect</button>
+  <button id="btnConnectAll" title="Use this if FSAE-CAN doesn't appear in the normal list">Show all devices</button>
+  <button id="btnDisconnect" disabled>Disconnect</button>
+  <button id="btnRecord" disabled>Record CSV</button>
+  <button id="btnReset" disabled>Reset min/max</button>
+  <button id="btnDev">Dev</button>
+  <span class="spacer"></span>
+  <span class="pill"><span class="dot" id="dotBle"></span><span id="txtBle">BLE: not connected</span></span>
+  <span class="pill"><span class="dot" id="dotCan"></span><span id="txtCan">CAN: --</span></span>
+</header>
+
+<div id="bus">
+  <span>frames/s <b id="sFps">--</b></span>
+  <span>not in file <b id="sOther">--</b>/s</span>
+  <span id="wrapBusErr">bus_err <b id="sBusErr">--</b></span>
+  <span id="wrapMissed">missed <b id="sMissed">--</b></span>
+  <span>rx_err <b id="sRxErr">--</b></span>
+  <span>tx_err <b id="sTxErr">--</b></span>
+  <span>state <b id="sState">--</b></span>
+  <span id="sRec"></span>
+</div>
+
+<div id="shift">
+  <div id="shiftLeds"></div>
+  <div id="shiftInfo">
+    <span id="shiftRpm">-- rpm</span>
+    <span id="shiftMode"></span>
+    <span id="shiftRange"></span>
+    <span id="shiftPreviewTag">PREVIEW</span>
+  </div>
+</div>
+
+<main id="main">
+  <div id="msg">Press <b>Connect</b> and pick <b>FSAE-CAN</b>.</div>
+</main>
+
+<div id="devBackdrop"></div>
+<aside id="dev">
+  <div class="head">
+    <h2>Dev panel</h2>
+    <button id="btnDevClose">Close</button>
+  </div>
+
+  <div class="body" id="devLocked">
+    <label>Password
+      <input type="password" id="devPw" autocomplete="current-password">
+    </label>
+    <button class="primary" id="btnUnlock">Unlock</button>
+    <p class="err" id="devPwErr"></p>
+  </div>
+
+  <div class="body" id="devUnlocked" hidden>
+    <fieldset>
+      <legend>Shift lights</legend>
+      <label>Mode
+        <select id="devMode"></select>
+      </label>
+      <label>Brightness <span id="devBrightVal"></span>
+        <input type="range" id="devBright" min="5" max="255" step="1">
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>LED turn-on RPM</legend>
+      <div class="btns">
+        <button id="btnGraph">Show graph</button>
+      </div>
+      <div id="graphWrap" hidden>
+        <svg id="graph" viewBox="0 0 440 260"></svg>
+        <div id="graphReadout">Drag a point (or the red flash line) up or down</div>
+      </div>
+      <table id="ledTable"></table>
+      <p class="note">Each LED turns on at or above its RPM. At or above the flash RPM the whole bar flashes.
+        RPMs can't go down from one LED to the next.</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Auto-fill</legend>
+      <div class="row">
+        <label>First LED RPM <input type="number" id="fillFirst" min="500" max="25000" step="50" value="9000"></label>
+        <label>Last LED RPM <input type="number" id="fillLast" min="500" max="25000" step="50" value="13000"></label>
+      </div>
+      <label>Curve <span id="fillCurveVal"></span>
+        <input type="range" id="fillCurve" min="-100" max="100" step="5" value="0">
+      </label>
+      <div class="btns">
+        <button id="btnFillLinear">Linear</button>
+        <button id="btnFillCurve">Apply curve</button>
+      </div>
+      <p class="note">Fills the 16 LED RPMs in the table. Nothing is sent until you press Save.</p>
+    </fieldset>
+
+    <div class="btns">
+      <button class="primary" id="btnApply">Save to ESP</button>
+      <button id="btnRevert">Reload from ESP</button>
+    </div>
+    <button id="btnSweep">Run LED sweep test on the car</button>
+    <p class="err" id="devErr"></p>
+    <p class="ok" id="devOk"></p>
+
+    <fieldset>
+      <legend>Preview (this screen only)</legend>
+      <label class="check"><input type="checkbox" id="devPreviewOn"> Drive the on-screen lights with this slider</label>
+      <label>RPM <span id="devPreviewVal"></span>
+        <input type="range" id="devPreview" min="0" max="16000" step="50" value="8000">
+      </label>
+      <p class="note">Uses the mode and RPMs above, before you save them.</p>
+    </fieldset>
+
+    <button id="btnLock">Lock panel</button>
+  </div>
+</aside>
+
+<script>
+// ===================== EASY-TO-CHANGE SETTINGS =====================
+// Dev panel password. NOTE: this only stops casual fiddling - anyone who opens the page
+// source (or the GitHub repo, if it's public) can read it.
+const DEV_PASSWORD   = 'fsae2026';
+// Parameter (from can_streams.txt) that drives the shift light preview
+const RPM_PARAM_NAME = 'Engine Speed';
+// ====================================================================
+
+// Must match the firmware
+const SVC_UUID     = '7a1d0001-3c4e-4b8a-9f2d-5e6c7b8a9d01';
+const DATA_UUID    = '7a1d0002-3c4e-4b8a-9f2d-5e6c7b8a9d01';
+const STATUS_UUID  = '7a1d0003-3c4e-4b8a-9f2d-5e6c7b8a9d01';
+const CONFIG_UUID  = '7a1d0004-3c4e-4b8a-9f2d-5e6c7b8a9d01';
+const CONTROL_UUID = '7a1d0005-3c4e-4b8a-9f2d-5e6c7b8a9d01';
+const CFG_CHUNK    = 480;
+const STALE_MS     = 1000;
+const REC_MS       = 50;     // CSV sample period (20 Hz)
+const FLASH_HALF_MS = 62;    // same flash rate as the ESP
+const STATES       = ['STOPPED', 'RUNNING', 'BUS_OFF', 'RECOVERING'];
+
+// Shown before the first connection; replaced by whatever the ESP reports.
+const B = '#0000ff', G = '#00ff00', Y = '#ffb400', R = '#ff0000';
+const DEFAULT_SHIFT = {
+  mode: 0, bright: 60, flash: 13500, leds: 16,
+  rpm: Array.from({ length: 16 }, (_, i) => Math.round(9000 + 4000 * i / 15)),
+  layouts: [
+    { name: '3/10/3 Blue/Green/Red',   flash: R, sections: [[3, B], [10, G], [3, R]] },
+    { name: '4/8/4 Blue/Green/Red',    flash: R, sections: [[4, B], [8, G], [4, R]] },
+    { name: '5/6/5 Blue/Green/Red',    flash: R, sections: [[5, B], [6, G], [5, R]] },
+    { name: '10/3/3 Green/Yellow/Red', flash: R, sections: [[10, G], [3, Y], [3, R]] },
+    { name: '8/4/4 Green/Yellow/Red',  flash: R, sections: [[8, G], [4, Y], [4, R]] },
+    { name: '6/5/5 Green/Yellow/Red',  flash: R, sections: [[6, G], [5, Y], [5, R]] },
+  ],
+};
+
+const $ = id => document.getElementById(id);
+let device = null, chars = {}, streams = [], cfgVersion = -1, setVersion = -1;
+let userDisconnect = false, loadingConfig = false;
+let lastBusErr = null, lastMissed = null;
+let recording = false, recRows = [], recTimer = null, recStart = 0;
+let shiftCfg = loadCachedShift();
+let rpmRef = null;   // { stream, param } for RPM_PARAM_NAME
+
+// ---------- small storage helpers (storage can be unavailable) ----------
+function store(kind, key, val) { try { window[kind].setItem(key, val); } catch (e) {} }
+function fetchStore(kind, key) { try { return window[kind].getItem(key); } catch (e) { return null; } }
+function loadCachedShift() {
+  try { const s = JSON.parse(fetchStore('localStorage', 'shiftCfg')); if (s && s.layouts && s.rpm) return s; } catch (e) {}
+  return JSON.parse(JSON.stringify(DEFAULT_SHIFT));
+}
+
+// ---------- UI helpers ----------
+function setMsg(text, isErr = false) {
+  const main = $('main');
+  main.innerHTML = '';
+  const d = document.createElement('div');
+  d.id = 'msg';
+  d.className = isErr ? 'err' : '';
+  d.innerHTML = text;
+  main.appendChild(d);
+}
+function setPill(dot, txt, cls, text) {
+  $(dot).className = 'dot ' + (cls || '');
+  $(txt).textContent = text;
+}
+function fmt(v, d) { return Number.isFinite(v) ? v.toFixed(d) : '--'; }
+function connected() { return !!(device && device.gatt.connected && chars.control); }
+function setButtons(isConn) {
+  $('btnConnect').disabled = isConn;
+  $('btnConnectAll').disabled = isConn;
+  $('btnDisconnect').disabled = !isConn;
+  $('btnRecord').disabled = !isConn && !recording;
+  $('btnReset').disabled = !isConn;
+  updateDevEnabled();
+}
+
+// ---------- Stream config ----------
+function parseConfig(text) {
+  const out = [];
+  let cur = null;
+  for (const line of text.split('\n')) {
+    const f = line.split('|');
+    if (f[0] === 'S' && f.length >= 4) {
+      cur = { idx: +f[1], id: +f[2], name: f.slice(3).join('|'), params: [], last: 0, hz: 0 };
+      out[cur.idx] = cur;
+    } else if (f[0] === 'P' && f.length >= 4 && cur) {
+      cur.params.push({ name: f[1], dec: +f[2], unit: f[3], value: NaN, min: Infinity, max: -Infinity });
+    }
+  }
+  return out.filter(Boolean);
+}
+
+function findRpm() {
+  rpmRef = null;
+  for (const s of streams) for (const p of s.params)
+    if (p.name.toLowerCase() === RPM_PARAM_NAME.toLowerCase()) { rpmRef = { stream: s, param: p }; return; }
+}
+
+function buildUI() {
+  const main = $('main');
+  main.innerHTML = '';
+  if (!streams.length) { setMsg('Connected, but no streams in the config. Check can_streams.txt on the ESP.', true); return; }
+  for (const s of streams) {
+    const sec = document.createElement('section');
+    sec.className = 'stale';
+    sec.innerHTML = `<h2><span></span><span class="hz"></span><span class="stale-tag">no data</span></h2><div class="grid"></div>`;
+    sec.querySelector('h2 span').textContent = `${s.name}  ·  ID ${s.id} (0x${s.id.toString(16).toUpperCase()})`;
+    s.elSec = sec;
+    s.elHz = sec.querySelector('.hz');
+    const grid = sec.querySelector('.grid');
+    for (const p of s.params) {
+      const t = document.createElement('div');
+      t.className = 'tile';
+      t.innerHTML = `<div class="name"></div><div class="val"><span class="v">--</span><span class="unit"></span></div><div class="mm">min -- · max --</div>`;
+      t.querySelector('.name').textContent = p.name;
+      t.querySelector('.name').title = p.name;
+      t.querySelector('.unit').textContent = p.unit;
+      p.elV = t.querySelector('.v');
+      p.elMM = t.querySelector('.mm');
+      grid.appendChild(t);
+    }
+    main.appendChild(sec);
+  }
+}
+
+async function bleWrite(ch, bytes) {
+  if (ch.writeValueWithResponse) return ch.writeValueWithResponse(bytes);
+  return ch.writeValue(bytes);
+}
+
+async function loadConfig() {
+  if (loadingConfig) return;
+  loadingConfig = true;
+  try {
+    let text = '';
+    for (let page = 0; page < 64; page++) {
+      await bleWrite(chars.config, new Uint8Array([page]));
+      const v = await chars.config.readValue();
+      text += new TextDecoder().decode(v);
+      if (v.byteLength < CFG_CHUNK) break;
+    }
+    if (recording) stopRecording();   // columns would change
+    streams = parseConfig(text);
+    findRpm();
+    buildUI();
+  } finally {
+    loadingConfig = false;
+  }
+}
+
+// ---------- Shift light settings (CONTROL characteristic) ----------
+function hex(h) { return '#' + h.toLowerCase(); }
+function parseShift(text) {
+  const cfg = { layouts: [] };
+  for (const line of text.split('\n')) {
+    if (line.startsWith('L|')) {
+      const [, name, flash, secs] = line.split('|');
+      cfg.layouts.push({
+        name, flash: hex(flash),
+        sections: (secs || '').split(',').filter(Boolean).map(s => { const [len, c] = s.split(':'); return [+len, hex(c)]; }),
+      });
+    } else if (line.startsWith('rpm=')) {
+      cfg.rpm = line.slice(4).split(',').map(Number);
+    } else {
+      const m = line.match(/^(\w+)=(\d+)$/);
+      if (m) cfg[m[1]] = +m[2];
+    }
+  }
+  return cfg;
+}
+
+// Settings are paged like the stream config: write "page=N", read up to CFG_CHUNK bytes
+async function loadShift() {
+  let text = '';
+  for (let page = 0; page < 8; page++) {
+    await sendCmd(`page=${page}`);
+    const v = await chars.control.readValue();
+    text += new TextDecoder().decode(v);
+    if (v.byteLength < CFG_CHUNK) break;
+  }
+  const cfg = parseShift(text);
+  if (cfg.layouts.length && cfg.rpm && cfg.rpm.length) {
+    shiftCfg = cfg;
+    store('localStorage', 'shiftCfg', JSON.stringify(cfg));
+    buildShiftLeds();
+    fillDevForm();
+  }
+}
+
+async function sendCmd(cmd) {
+  await bleWrite(chars.control, new TextEncoder().encode(cmd));
+}
+
+// ---------- Shift light simulation ----------
+let ledEls = [];
+function buildShiftLeds() {
+  const n = shiftCfg.leds || 16;
+  const box = $('shiftLeds');
+  box.style.setProperty('--n', n);
+  box.innerHTML = '';
+  ledEls = [];
+  for (let i = 0; i < n; i++) {
+    const d = document.createElement('div');
+    d.className = 'led';
+    box.appendChild(d);
+    ledEls.push(d);
+  }
+}
+
+function ledColors(layout, n) {
+  const out = [];
+  for (const [len, c] of layout.sections) for (let j = 0; j < len && out.length < n; j++) out.push(c);
+  while (out.length < n) out.push('#ffffff');
+  return out;
+}
+
+// Same logic as updateShiftLights() on the ESP
+function renderShift() {
+  const n = ledEls.length;
+  const preview = isUnlocked() && $('devPreviewOn').checked;
+  const src = preview ? edit : shiftCfg;     // preview uses the unsaved editor values
+  let rpm = NaN, valid = false;
+
+  if (preview) {
+    rpm = +$('devPreview').value;
+    valid = true;
+  } else if (rpmRef) {
+    rpm = rpmRef.param.value;
+    valid = connected() && Number.isFinite(rpm) && rpmRef.stream.last && performance.now() - rpmRef.stream.last < STALE_MS;
+  }
+
+  const layout = shiftCfg.layouts[src.mode] || shiftCfg.layouts[0];
+  const colors = ledColors(layout, n);
+  const flash = valid && rpm >= src.flash;
+  const flashOn = Math.floor(performance.now() / FLASH_HALF_MS) % 2 === 0;
+  for (let i = 0; i < n; i++) {
+    let c = '';
+    if (flash) c = flashOn ? layout.flash : '';
+    else if (valid && rpm >= src.rpm[i]) c = colors[i];
+    ledEls[i].style.background = c;
+    ledEls[i].style.boxShadow = c ? `0 0 10px ${c}` : '';
+  }
+
+  $('shiftRpm').textContent = valid ? `${Math.round(rpm)} rpm` : (rpmRef || preview ? '-- rpm' : `no "${RPM_PARAM_NAME}" in streams`);
+  $('shiftMode').textContent = layout.name;
+  $('shiftRange').textContent = `${src.rpm[0]} → ${src.rpm[n - 1]} · flash ${src.flash}`;
+  $('shiftPreviewTag').style.display = preview ? 'inline' : 'none';
+}
+
+// ---------- Notifications ----------
+function onData(e) {
+  const dv = e.target.value;
+  if (dv.byteLength < 2) return;
+  const si = dv.getUint8(0), first = dv.getUint8(1);
+  const s = streams.find(x => x.idx === si);
+  if (!s) return;
+
+  if (first === 0xFF) {                       // rate packet
+    if (dv.byteLength >= 4) { s.hz = dv.getUint16(2, true); s.elHz.textContent = `${s.hz} Hz`; }
+    return;
+  }
+  const n = Math.floor((dv.byteLength - 2) / 4);
+  for (let k = 0; k < n; k++) {
+    const p = s.params[first + k];
+    if (!p) continue;
+    const v = dv.getFloat32(2 + 4 * k, true);
+    p.value = v;
+    if (Number.isFinite(v)) { if (v < p.min) p.min = v; if (v > p.max) p.max = v; }
+    p.elV.textContent = fmt(v, p.dec);
+    p.elMM.textContent = `min ${fmt(p.min, p.dec)} · max ${fmt(p.max, p.dec)}`;
+  }
+  s.last = performance.now();
+}
+
+function onStatus(e) {
+  const dv = e.target.value;
+  if (dv.byteLength < 18) return;
+  const canOk = dv.getUint8(1) & 1;
+  const state = STATES[dv.getUint8(2)] || '?';
+  const ver = dv.getUint8(3);
+  const fps = dv.getUint16(4, true), other = dv.getUint16(6, true);
+  const busErr = dv.getUint32(8, true), missed = dv.getUint32(12, true);
+
+  setPill('dotCan', 'txtCan', canOk ? 'good' : 'bad', canOk ? 'CAN: receiving' : 'CAN: no traffic');
+  $('sFps').textContent = fps;
+  $('sOther').textContent = other;
+  $('sBusErr').textContent = busErr;
+  $('sMissed').textContent = missed;
+  $('sRxErr').textContent = dv.getUint8(16);
+  $('sTxErr').textContent = dv.getUint8(17);
+  $('sState').textContent = state;
+  $('wrapBusErr').classList.toggle('alert', lastBusErr !== null && busErr > lastBusErr);
+  $('wrapMissed').classList.toggle('alert', lastMissed !== null && missed > lastMissed);
+  lastBusErr = busErr; lastMissed = missed;
+
+  if (cfgVersion !== -1 && ver !== cfgVersion) loadConfig().catch(err => console.error(err));  // 'r' on the ESP
+  cfgVersion = ver;
+
+  if (dv.byteLength >= 19) {                   // settings changed (maybe by another device)
+    const sv = dv.getUint8(18);
+    if (setVersion !== -1 && sv !== setVersion) loadShift().catch(err => console.error(err));
+    setVersion = sv;
+  }
+}
+
+setInterval(() => {
+  const now = performance.now();
+  for (const s of streams) {
+    if (s.elSec) s.elSec.classList.toggle('stale', !s.last || now - s.last > STALE_MS);
+  }
+}, 250);
+setInterval(renderShift, 30);
+
+// ---------- Connection ----------
+async function connect(showAll = false) {
+  if (!navigator.bluetooth) {
+    setMsg('This browser has no Web Bluetooth.<br>Use Chrome or Edge on Windows/Android, or the Bluefy browser on iPhone.', true);
+    return;
+  }
+  try {
+    userDisconnect = false;
+    device = await navigator.bluetooth.requestDevice(showAll
+      ? { acceptAllDevices: true, optionalServices: [SVC_UUID] }   // lists everything nearby
+      : { filters: [{ services: [SVC_UUID] }, { namePrefix: 'FSAE' }], optionalServices: [SVC_UUID] });
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+    await openGatt();
+  } catch (err) {
+    console.error(err);
+    if (err.name === 'NotFoundError' && !/cancel/i.test(err.message)) setMsg('No device picked: ' + err.message, true);
+    else if (err.name !== 'NotFoundError') setMsg(`Connect failed (${err.name}): ${err.message}`, true);
+    setButtons(false);
+  }
+}
+
+async function openGatt() {
+  setPill('dotBle', 'txtBle', 'warn', 'BLE: connecting…');
+  const server = await device.gatt.connect();
+  const svc = await server.getPrimaryService(SVC_UUID);
+  chars.data    = await svc.getCharacteristic(DATA_UUID);
+  chars.status  = await svc.getCharacteristic(STATUS_UUID);
+  chars.config  = await svc.getCharacteristic(CONFIG_UUID);
+  try { chars.control = await svc.getCharacteristic(CONTROL_UUID); }
+  catch (e) { chars.control = null; console.warn('ESP firmware has no control characteristic'); }
+
+  await loadConfig();
+  if (chars.control) await loadShift();
+  cfgVersion = -1;
+  setVersion = -1;
+
+  chars.data.addEventListener('characteristicvaluechanged', onData);
+  chars.status.addEventListener('characteristicvaluechanged', onStatus);
+  await chars.data.startNotifications();
+  await chars.status.startNotifications();
+
+  setPill('dotBle', 'txtBle', 'good', `BLE: ${device.name || 'connected'}`);
+  setButtons(true);
+}
+
+async function onDisconnected() {
+  setPill('dotBle', 'txtBle', 'bad', 'BLE: disconnected');
+  setPill('dotCan', 'txtCan', '', 'CAN: --');
+  setButtons(false);
+  if (userDisconnect || !device) return;
+  for (let i = 1; i <= 5; i++) {                // auto-reconnect
+    setPill('dotBle', 'txtBle', 'warn', `BLE: reconnecting (${i}/5)…`);
+    await new Promise(r => setTimeout(r, 1000));
+    try { await openGatt(); return; } catch (e) { /* try again */ }
+  }
+  setPill('dotBle', 'txtBle', 'bad', 'BLE: lost - press Connect');
+}
+
+function disconnect() {
+  userDisconnect = true;
+  if (device && device.gatt.connected) device.gatt.disconnect();
+}
+
+// ---------- CSV recording ----------
+function startRecording() {
+  recording = true;
+  recRows = [];
+  recStart = performance.now();
+  recTimer = setInterval(() => {
+    const row = [((performance.now() - recStart) / 1000).toFixed(3)];
+    for (const s of streams) for (const p of s.params) row.push(Number.isFinite(p.value) ? p.value.toFixed(p.dec) : '');
+    recRows.push(row.join(','));
+    $('sRec').textContent = `● REC ${((performance.now() - recStart) / 1000).toFixed(0)} s`;
+  }, REC_MS);
+  $('btnRecord').textContent = 'Stop & save';
+  $('btnRecord').classList.add('rec');
+  $('sRec').classList.add('alert');
+}
+
+function stopRecording() {
+  clearInterval(recTimer);
+  recording = false;
+  $('btnRecord').textContent = 'Record CSV';
+  $('btnRecord').classList.remove('rec');
+  $('sRec').textContent = '';
+  const esc = s => /[",]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  const header = ['time_s'];
+  for (const s of streams) for (const p of s.params) header.push(esc(p.unit ? `${p.name} (${p.unit})` : p.name));
+  const csv = header.join(',') + '\n' + recRows.join('\n') + '\n';
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  const t = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  a.download = `can_log_${t.getFullYear()}${pad(t.getMonth() + 1)}${pad(t.getDate())}_${pad(t.getHours())}${pad(t.getMinutes())}${pad(t.getSeconds())}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  setButtons(connected());
+}
+
+// ---------- Dev panel ----------
+// Unlock lives only in memory: reloading or closing the page locks the panel again.
+let devUnlocked = false;
+function isUnlocked() { return devUnlocked; }
+
+function showDevView() {
+  const u = isUnlocked();
+  $('devLocked').hidden = u;
+  $('devUnlocked').hidden = !u;
+  if (u) { $('devMode').value = edit.mode; drawGraph(); }   // keep unsaved edits when reopening
+  else setTimeout(() => $('devPw').focus(), 0);
+}
+
+// Editor copy of the settings - only sent to the ESP on Save
+let edit = JSON.parse(JSON.stringify({ mode: shiftCfg.mode, bright: shiftCfg.bright, flash: shiftCfg.flash, rpm: shiftCfg.rpm }));
+const SNAP = 50;
+const snap = v => Math.round(v / SNAP) * SNAP;
+
+function fillDevForm() {
+  edit = JSON.parse(JSON.stringify({ mode: shiftCfg.mode, bright: shiftCfg.bright, flash: shiftCfg.flash, rpm: shiftCfg.rpm }));
+  const sel = $('devMode');
+  sel.innerHTML = '';
+  shiftCfg.layouts.forEach((L, i) => {
+    const o = document.createElement('option');
+    o.value = i;
+    o.textContent = `${i}: ${L.name}`;
+    sel.appendChild(o);
+  });
+  sel.value = edit.mode;
+  $('devBright').value = edit.bright;
+  $('devBrightVal').textContent = edit.bright;
+  $('fillFirst').value = edit.rpm[0];
+  $('fillLast').value = edit.rpm[edit.rpm.length - 1];
+  buildLedTable();
+  drawGraph();
+  updatePreviewRange();
+}
+
+function updatePreviewRange() {
+  $('devPreview').max = Math.max(16000, edit.flash + 2000);
+  $('devPreviewVal').textContent = $('devPreview').value;
+}
+
+function editColors() {
+  const L = shiftCfg.layouts[edit.mode] || shiftCfg.layouts[0];
+  return { L, colors: ledColors(L, edit.rpm.length) };
+}
+
+function buildLedTable() {
+  const { L, colors } = editColors();
+  const t = $('ledTable');
+  t.innerHTML = '';
+  edit.rpm.forEach((r, i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${i + 1}</td><td class="sw"><span class="swatch"></span></td>
+                    <td><input type="number" min="500" max="25000" step="50"></td>`;
+    tr.querySelector('.swatch').style.background = colors[i];
+    const inp = tr.querySelector('input');
+    inp.value = r;
+    inp.dataset.led = i;
+    inp.oninput = () => { edit.rpm[i] = Math.round(+inp.value); validateEdit(); drawGraph(); };
+    t.appendChild(tr);
+  });
+  const tr = document.createElement('tr');
+  tr.className = 'flash';
+  tr.innerHTML = `<td>Flash</td><td class="sw"><span class="swatch"></span></td>
+                  <td><input type="number" min="500" max="25000" step="50" id="devFlash"></td>`;
+  tr.querySelector('.swatch').style.background = L.flash;
+  const inp = tr.querySelector('input');
+  inp.value = edit.flash;
+  inp.oninput = () => { edit.flash = Math.round(+inp.value); validateEdit(); drawGraph(); updatePreviewRange(); };
+  t.appendChild(tr);
+  validateEdit();
+}
+
+// Returns an error string, or '' if OK. Also marks bad inputs red.
+function validateEdit() {
+  let err = '';
+  const inputs = [...$('ledTable').querySelectorAll('input[data-led]')];
+  edit.rpm.forEach((r, i) => {
+    let bad = !(r >= 500 && r <= 25000);
+    if (!bad && i && r < edit.rpm[i - 1]) bad = true;
+    if (bad && !err) err = `LED ${i + 1}: must be 500-25000 and not lower than LED ${i}.`;
+    if (inputs[i]) inputs[i].classList.toggle('bad', bad);
+  });
+  const fBad = !(edit.flash >= edit.rpm[edit.rpm.length - 1] && edit.flash <= 25000);
+  if ($('devFlash')) $('devFlash').classList.toggle('bad', fBad);
+  if (fBad && !err) err = 'Flash RPM must be at least the last LED\'s RPM (max 25000).';
+  return err;
+}
+
+function syncInputs() {
+  const inputs = $('ledTable').querySelectorAll('input[data-led]');
+  inputs.forEach((inp, i) => { inp.value = edit.rpm[i]; });
+  if ($('devFlash')) $('devFlash').value = edit.flash;
+  validateEdit();
+  updatePreviewRange();
+}
+
+// ---------- Auto-fill ----------
+function curveExp() { return Math.pow(2, +$('fillCurve').value / 50); }   // -100..100 -> 0.25..4
+function updateCurveLabel() {
+  const v = +$('fillCurve').value;
+  $('fillCurveVal').textContent = v === 0 ? '(linear)' : v < 0 ? '(LEDs bunch up near the top)' : '(LEDs bunch up near the bottom)';
+}
+function autoFill(useCurve) {
+  const first = Math.round(+$('fillFirst').value), last = Math.round(+$('fillLast').value);
+  if (!(first >= 500 && last <= 25000 && first <= last)) { $('devErr').textContent = 'Auto-fill: first must be ≤ last, within 500-25000.'; return; }
+  const n = edit.rpm.length, k = useCurve ? curveExp() : 1;
+  for (let i = 0; i < n; i++) edit.rpm[i] = snap(first + (last - first) * Math.pow(i / (n - 1), k));
+  edit.rpm[0] = first; edit.rpm[n - 1] = last;
+  for (let i = 1; i < n; i++) edit.rpm[i] = Math.max(edit.rpm[i], edit.rpm[i - 1]);
+  if (edit.flash < last) edit.flash = last;
+  $('devErr').textContent = '';
+  syncInputs();
+  drawGraph();
+}
+
+// ---------- Graph (drag points like RaceStudio) ----------
+const GW = 440, GH = 260, GL = 46, GR = 14, GT = 14, GB = 26;
+let gRange = null, dragging = null;   // dragging = led index, or 'flash'
+const SVGNS = 'http://www.w3.org/2000/svg';
+
+function graphRange() {
+  const lo = Math.min(...edit.rpm), hi = Math.max(edit.flash, ...edit.rpm);
+  const step = (hi - lo) > 4000 ? 1000 : 500;
+  return { min: Math.max(0, Math.floor((lo - step) / step) * step), max: Math.ceil((hi + step) / step) * step, step };
+}
+const gx = i => GL + (i + 0.5) * (GW - GL - GR) / edit.rpm.length;
+const gy = r => GT + (gRange.max - r) / (gRange.max - gRange.min) * (GH - GT - GB);
+const gr = y => gRange.max - (y - GT) / (GH - GT - GB) * (gRange.max - gRange.min);
+
+function el(tag, attrs, parent, text) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text !== undefined) e.textContent = text;
+  if (parent) parent.appendChild(e);
+  return e;
+}
+
+function drawGraph() {
+  if ($('graphWrap').hidden) return;
+  if (!dragging) gRange = graphRange();
+  const svg = $('graph');
+  svg.innerHTML = '';
+  const { L, colors } = editColors();
+
+  for (let r = gRange.min; r <= gRange.max; r += gRange.step) {     // grid + y labels
+    el('line', { x1: GL, x2: GW - GR, y1: gy(r), y2: gy(r), stroke: '#2b303b', 'stroke-width': 1 }, svg);
+    el('text', { x: GL - 6, y: gy(r) + 4, 'text-anchor': 'end', fill: '#8a909c', 'font-size': 10 }, svg, r);
+  }
+  edit.rpm.forEach((_, i) => el('text', { x: gx(i), y: GH - 8, 'text-anchor': 'middle', fill: '#8a909c', 'font-size': 10 }, svg, i + 1));
+
+  // flash line (draggable)
+  const fy = gy(edit.flash);
+  el('line', { x1: GL, x2: GW - GR, y1: fy, y2: fy, stroke: L.flash, 'stroke-width': 1.5, 'stroke-dasharray': '5 4' }, svg);
+  el('text', { x: GL + 4, y: fy - 5, fill: L.flash, 'font-size': 10 }, svg, `flash ${edit.flash}`);
+  const fh = el('rect', { x: GL, y: fy - 7, width: GW - GL - GR, height: 14, fill: 'transparent', class: 'flashHandle' }, svg);
+  fh.addEventListener('pointerdown', e => startDrag(e, 'flash'));
+
+  // curve
+  el('polyline', { points: edit.rpm.map((r, i) => `${gx(i)},${gy(r)}`).join(' '), fill: 'none', stroke: '#8a909c', 'stroke-width': 1.5 }, svg);
+
+  // points
+  edit.rpm.forEach((r, i) => {
+    const c = el('circle', { cx: gx(i), cy: gy(r), r: dragging === i ? 9 : 7, fill: colors[i], stroke: '#e8eaee', 'stroke-width': 1.5, class: 'pt' }, svg);
+    c.addEventListener('pointerdown', e => startDrag(e, i));
+  });
+}
+
+function startDrag(e, which) {
+  e.preventDefault();
+  dragging = which;
+  $('graph').setPointerCapture(e.pointerId);
+  moveDrag(e);
+}
+
+function moveDrag(e) {
+  if (dragging === null) return;
+  const rect = $('graph').getBoundingClientRect();
+  const y = (e.clientY - rect.top) * (GH / rect.height);
+  let r = snap(gr(y));
+  const n = edit.rpm.length;
+  if (dragging === 'flash') {
+    r = Math.min(25000, Math.max(edit.rpm[n - 1], r));
+    edit.flash = r;
+    $('graphReadout').textContent = `Flash: ${r} rpm`;
+  } else {
+    const i = dragging;
+    const lo = i ? edit.rpm[i - 1] : 500;
+    const hi = i < n - 1 ? edit.rpm[i + 1] : edit.flash;
+    r = Math.min(hi, Math.max(lo, r));
+    edit.rpm[i] = r;
+    $('graphReadout').textContent = `LED ${i + 1}: ${r} rpm`;
+  }
+  syncInputs();
+  drawGraph();
+}
+
+function endDrag() {
+  if (dragging === null) return;
+  dragging = null;
+  drawGraph();   // re-fit the axis
+}
+
+$('graph').addEventListener('pointermove', moveDrag);
+$('graph').addEventListener('pointerup', endDrag);
+$('graph').addEventListener('pointercancel', endDrag);
+
+function updateDevEnabled() {
+  const ok = connected();
+  $('btnApply').disabled = !ok;
+  $('btnRevert').disabled = !ok;
+  $('btnSweep').disabled = !ok;
+  $('devErr').textContent = ok ? '' : 'Connect to the ESP to save settings or run the sweep test.';
+}
+
+function unlock() {
+  if ($('devPw').value === DEV_PASSWORD) {
+    devUnlocked = true;
+    $('devPw').value = '';
+    $('devPwErr').textContent = '';
+    showDevView();
+    updateDevEnabled();
+  } else {
+    $('devPwErr').textContent = 'Wrong password';
+  }
+}
+
+function lock() {
+  devUnlocked = false;
+  $('devPreviewOn').checked = false;
+  showDevView();
+}
+
+async function applySettings() {
+  $('devErr').textContent = '';
+  $('devOk').textContent = '';
+  const err = validateEdit();
+  if (err) { $('devErr').textContent = err; return; }
+  try {
+    const cmds = [`mode=${edit.mode}`, `bright=${edit.bright}`, `flash=${edit.flash}`];
+    edit.rpm.forEach((r, i) => cmds.push(`led${i}=${r}`));
+    cmds.push('save');
+    $('devOk').textContent = 'Sending…';
+    const want = JSON.stringify(edit);
+    for (const c of cmds) await sendCmd(c);
+    await new Promise(r => setTimeout(r, 300));
+    await loadShift();     // also refills the form from what the ESP actually has
+    const got = JSON.stringify({ mode: shiftCfg.mode, bright: shiftCfg.bright, flash: shiftCfg.flash, rpm: shiftCfg.rpm });
+    $('devOk').textContent = '';
+    if (got === want) $('devOk').textContent = 'Saved to the ESP.';
+    else $('devErr').textContent = 'The ESP rejected some values - check the Serial monitor.';
+  } catch (err) {
+    $('devOk').textContent = '';
+    $('devErr').textContent = 'Save failed: ' + err.message;
+  }
+}
+
+$('btnDev').onclick = () => { document.body.classList.add('dev-open'); showDevView(); updateDevEnabled(); };
+$('btnDevClose').onclick = () => document.body.classList.remove('dev-open');
+$('devBackdrop').onclick = () => document.body.classList.remove('dev-open');
+$('btnUnlock').onclick = unlock;
+$('devPw').addEventListener('keydown', e => { if (e.key === 'Enter') unlock(); });
+$('btnLock').onclick = lock;
+$('btnApply').onclick = applySettings;
+$('btnSweep').onclick = () => sendCmd('sweep').catch(err => { $('devErr').textContent = 'Sweep failed: ' + err.message; });
+$('btnRevert').onclick = () => loadShift().then(() => { $('devOk').textContent = 'Reloaded from the ESP.'; })
+                                         .catch(err => { $('devErr').textContent = 'Reload failed: ' + err.message; });
+$('devMode').onchange = () => { edit.mode = +$('devMode').value; buildLedTable(); drawGraph(); };
+$('btnGraph').onclick = () => {
+  const show = $('graphWrap').hidden;
+  $('graphWrap').hidden = !show;
+  $('btnGraph').textContent = show ? 'Hide graph' : 'Show graph';
+  drawGraph();
+};
+$('btnFillLinear').onclick = () => autoFill(false);
+$('btnFillCurve').onclick = () => autoFill(true);
+$('fillCurve').oninput = updateCurveLabel;
+$('devBright').oninput = () => { edit.bright = +$('devBright').value; $('devBrightVal').textContent = edit.bright; };
+$('devPreview').oninput = () => { $('devPreviewVal').textContent = $('devPreview').value; };
+
+// ---------- Main buttons ----------
+$('btnConnect').onclick = () => connect(false);
+$('btnConnectAll').onclick = () => connect(true);
+$('btnDisconnect').onclick = disconnect;
+$('btnRecord').onclick = () => recording ? stopRecording() : startRecording();
+$('btnReset').onclick = () => {
+  for (const s of streams) for (const p of s.params) {
+    p.min = Infinity; p.max = -Infinity;
+    if (p.elMM) p.elMM.textContent = 'min -- · max --';
+  }
+};
+
+buildShiftLeds();
+fillDevForm();
+updateCurveLabel();
+if (!navigator.bluetooth) {
+  setMsg('This browser has no Web Bluetooth.<br>Use Chrome or Edge on Windows/Android, or the Bluefy browser on iPhone.', true);
+  $('btnConnect').disabled = true;
+}
+</script>
+</body>
+</html>
